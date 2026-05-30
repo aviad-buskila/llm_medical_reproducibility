@@ -3,11 +3,35 @@ from __future__ import annotations
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import seaborn as sns
 
 from clinical_eval_pipeline.aggregate import model_level_summary
 from clinical_eval_pipeline.scoring.deterministic import normalize_text
+
+
+def _ci_bar(ax, summary: pd.DataFrame, col: str, title: str) -> bool:
+    """Draw a per-model bar with asymmetric 95% bootstrap-CI whiskers.
+
+    Returns False (and hides the axis) when the metric column is absent.
+    """
+    mean_col, lo_col, hi_col = f"{col}_mean", f"{col}_ci_low", f"{col}_ci_high"
+    if mean_col not in summary.columns:
+        ax.set_visible(False)
+        return False
+    models = summary["model"].tolist()
+    means = summary[mean_col].to_numpy(dtype=float)
+    lo = summary[lo_col].to_numpy(dtype=float)
+    hi = summary[hi_col].to_numpy(dtype=float)
+    yerr = np.vstack([np.clip(means - lo, 0, None), np.clip(hi - means, 0, None)])
+    x = list(range(len(models)))
+    ax.bar(x, means, yerr=yerr, capsize=4, color=sns.color_palette("muted", len(models)))
+    ax.set_xticks(x)
+    ax.set_xticklabels(models, rotation=30, ha="right", fontsize=8)
+    ax.set_title(title, fontsize=10)
+    ax.set_ylim(bottom=0)
+    return True
 
 
 def _df_to_markdown_or_fallback(df: pd.DataFrame, **kwargs) -> str:
@@ -60,11 +84,63 @@ def _pairwise_model_similarity(scored_df: pd.DataFrame) -> pd.DataFrame:
     return matrix
 
 
-def generate_figures(scored_df: pd.DataFrame, aggregate_df: pd.DataFrame, output_dir: str | Path) -> None:
+def generate_figures(
+    scored_df: pd.DataFrame,
+    aggregate_df: pd.DataFrame,
+    output_dir: str | Path,
+    *,
+    n_boot: int = 1000,
+    ci: float = 0.95,
+    seed: int = 42,
+) -> None:
     out_dir = Path(output_dir)
     fig_dir = out_dir / "figures"
     fig_dir.mkdir(parents=True, exist_ok=True)
     sns.set_theme(style="whitegrid")
+    ci_pct = int(round(ci * 100))
+
+    # --- Reviewer-driven figures: reproducibility metrics + bootstrap CIs ----
+    # These visualize the paper's core contribution (reproducibility, incl. the
+    # new semantic metric) and the new model set, with the same clustered
+    # bootstrap CIs reported in Tables 1-2.
+    repro_cols = [
+        ("normalized_self_agreement_rate", "Self-agreement (lexical) ↑"),
+        ("normalized_response_uniqueness_rate", "Uniqueness (lexical) ↓"),
+        ("semantic_self_similarity_mean", "Semantic self-similarity ↑"),
+    ]
+    repro_present = [(c, t) for c, t in repro_cols if c in aggregate_df.columns]
+    if repro_present:
+        rsum = model_level_summary(
+            aggregate_df, [c for c, _ in repro_present], n_boot=n_boot, ci=ci, seed=seed
+        )
+        fig, axes = plt.subplots(1, len(repro_present), figsize=(5 * len(repro_present), 4.2))
+        axes = np.atleast_1d(axes)
+        for ax, (c, t) in zip(axes, repro_present):
+            _ci_bar(ax, rsum, c, t)
+        fig.suptitle(f"Within-model reproducibility by model ({ci_pct}% bootstrap CI)")
+        fig.tight_layout()
+        fig.savefig(fig_dir / "reproducibility_ci_bar.png", dpi=160)
+        plt.close(fig)
+
+    quality_cols = [
+        ("bertscore_f1_mean", "BERTScore F1"),
+        ("token_f1_mean", "Token F1"),
+        ("rouge_l_mean", "ROUGE-L"),
+        ("judge_score_mean", "Judge"),
+    ]
+    quality_present = [(c, t) for c, t in quality_cols if c in aggregate_df.columns]
+    if quality_present:
+        qsum = model_level_summary(
+            aggregate_df, [c for c, _ in quality_present], n_boot=n_boot, ci=ci, seed=seed
+        )
+        fig, axes = plt.subplots(1, len(quality_present), figsize=(4.5 * len(quality_present), 4.2))
+        axes = np.atleast_1d(axes)
+        for ax, (c, t) in zip(axes, quality_present):
+            _ci_bar(ax, qsum, c, t)
+        fig.suptitle(f"Model-vs-gold quality by model ({ci_pct}% bootstrap CI)")
+        fig.tight_layout()
+        fig.savefig(fig_dir / "quality_ci_bar.png", dpi=160)
+        plt.close(fig)
 
     plt.figure(figsize=(10, 5))
     sns.barplot(data=scored_df, x="model", y="token_f1", errorbar="sd")

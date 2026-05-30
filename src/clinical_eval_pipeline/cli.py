@@ -37,7 +37,14 @@ def _build_report(scored_df: pd.DataFrame, config, out_dir: Path) -> tuple[Path,
         )
     aggregate_df = compute_aggregates(scored_df, semantic_repro_df)
     agg_path = save_aggregates(aggregate_df, out_dir)
-    generate_figures(scored_df, aggregate_df, out_dir)
+    generate_figures(
+        scored_df,
+        aggregate_df,
+        out_dir,
+        n_boot=config.bootstrap_resamples,
+        ci=config.bootstrap_ci,
+        seed=config.random_seed or 42,
+    )
     report_path = write_markdown_report(
         scored_df,
         aggregate_df,
@@ -67,8 +74,17 @@ def _resolve_resume(cli_resume: bool | None, config_resume: bool) -> bool:
     return cli_resume
 
 
-def _raw_exists(out_dir: Path) -> bool:
-    return (out_dir / "raw_responses.parquet").exists() or (out_dir / "raw_responses.csv").exists()
+def _apply_overrides(config, prompt_file: str | None, output_dir: str | None):
+    """Apply CLI overrides for dataset/output without editing the config file.
+
+    Lets a single config drive multiple datasets (e.g. MedQuAD vs MedicationQA)
+    and keep their outputs separate.
+    """
+    if prompt_file:
+        config.prompt_file = prompt_file
+    if output_dir:
+        config.output.output_dir = output_dir
+    return config
 
 
 def _read_scored(out_dir: Path) -> pd.DataFrame:
@@ -122,17 +138,14 @@ def run(
     sample: int | None = typer.Option(None, "--sample", min=1),
     sample_random: int | None = typer.Option(None, "--sample-random", min=1),
     sample_seed: int | None = typer.Option(None, "--sample-seed"),
+    prompt_file: str | None = typer.Option(None, "--prompt-file"),
+    output_dir: str | None = typer.Option(None, "--output-dir"),
 ) -> None:
-    """Run model inference loop and persist raw outputs."""
-    config = load_config(config_path)
+    """Run model inference loop and persist raw outputs (incrementally, resumable)."""
+    config = _apply_overrides(load_config(config_path), prompt_file, output_dir)
     effective_resume = _resolve_resume(resume, config.resume)
     command_line = " ".join(sys.argv)
     with tee_terminal_to_log(config.output.output_dir, config.output.log_subdir, command_line) as log_path:
-        out_dir = Path(config.output.output_dir)
-        if effective_resume and _raw_exists(out_dir):
-            typer.echo("[run] resume enabled and raw outputs already exist; skipping run phase")
-            typer.echo(f"[run] terminal output log -> {log_path}")
-            return
         typer.echo(f"[run] loading questions from {config.prompt_file}")
         questions = _apply_sampling(
             load_gold_csv(config.prompt_file),
@@ -141,7 +154,9 @@ def run(
             sample_seed=sample_seed,
         )
         typer.echo(f"[run] loaded {len(questions)} questions")
-        raw_df = run_evaluations(config, questions)
+        # run_evaluations is resume-aware: with resume it skips already-completed
+        # (model, question, run) triples recorded in the JSONL checkpoint.
+        raw_df = run_evaluations(config, questions, resume=effective_resume)
         typer.echo(f"[run] saved raw outputs: {len(raw_df)} rows -> {config.output.output_dir}")
         typer.echo(f"[run] terminal output log -> {log_path}")
 
@@ -185,9 +200,10 @@ def score(
 def report(
     config_path: str = "configs/pipeline.yaml",
     resume: bool | None = typer.Option(None, "--resume/--no-resume"),
+    output_dir: str | None = typer.Option(None, "--output-dir"),
 ) -> None:
     """Aggregate scored outputs and generate report + figures."""
-    config = load_config(config_path)
+    config = _apply_overrides(load_config(config_path), None, output_dir)
     effective_resume = _resolve_resume(resume, config.resume)
     command_line = " ".join(sys.argv)
     with tee_terminal_to_log(config.output.output_dir, config.output.log_subdir, command_line) as log_path:
@@ -212,6 +228,7 @@ def export_sample(
     sample_random: int = typer.Option(50, "--sample-random", min=1),
     sample_seed: int = typer.Option(42, "--sample-seed"),
     out: str = typer.Option("outputs/sampled_questions.csv", "--out"),
+    prompt_file: str | None = typer.Option(None, "--prompt-file"),
 ) -> None:
     """Export the exact deterministically sampled question set (supplementary S1).
 
@@ -219,7 +236,7 @@ def export_sample(
     commands, so the written file is precisely the evaluation set, making the
     sampling fully reproducible and documentable.
     """
-    config = load_config(config_path)
+    config = _apply_overrides(load_config(config_path), prompt_file, None)
     questions = load_gold_csv(config.prompt_file)
     sampled = _apply_sampling(
         questions, sample=None, sample_random=sample_random, sample_seed=sample_seed
@@ -236,9 +253,10 @@ def export_sample(
 @app.command(name="judge-reliability")
 def judge_reliability(
     config_path: str = "configs/pipeline.yaml",
+    output_dir: str | None = typer.Option(None, "--output-dir"),
 ) -> None:
     """Re-judge a stratified subset K times to quantify judge stochasticity."""
-    config = load_config(config_path)
+    config = _apply_overrides(load_config(config_path), None, output_dir)
     command_line = " ".join(sys.argv)
     with tee_terminal_to_log(config.output.output_dir, config.output.log_subdir, command_line) as log_path:
         out_dir = Path(config.output.output_dir)
@@ -264,17 +282,20 @@ def run_all(
     sample: int | None = typer.Option(None, "--sample", min=1),
     sample_random: int | None = typer.Option(None, "--sample-random", min=1),
     sample_seed: int | None = typer.Option(None, "--sample-seed"),
+    prompt_file: str | None = typer.Option(None, "--prompt-file"),
+    output_dir: str | None = typer.Option(None, "--output-dir"),
 ) -> None:
     """Run full pipeline: run -> score -> report."""
-    config = load_config(config_path)
+    config = _apply_overrides(load_config(config_path), prompt_file, output_dir)
     effective_resume = _resolve_resume(resume, config.resume)
     command_line = " ".join(sys.argv)
     with tee_terminal_to_log(config.output.output_dir, config.output.log_subdir, command_line) as log_path:
         typer.echo("[all] starting full pipeline")
         out_dir = Path(config.output.output_dir)
-        if effective_resume and _raw_exists(out_dir):
-            typer.echo("[all] resume enabled: found raw outputs, skipping run phase")
-            raw_df, _ = _read_raw(config_path)
+
+        if effective_resume and _scored_exists(out_dir):
+            typer.echo("[all] resume enabled: found scored outputs, skipping run + score phases")
+            scored_df = _read_scored(out_dir)
         else:
             questions = _apply_sampling(
                 load_gold_csv(config.prompt_file),
@@ -283,13 +304,10 @@ def run_all(
                 sample_seed=sample_seed,
             )
             typer.echo(f"[all] loaded {len(questions)} questions from {config.prompt_file}")
-            raw_df = run_evaluations(config, questions)
+            # Resume-aware + incrementally checkpointed: a crash mid-run resumes
+            # from the JSONL checkpoint instead of restarting from scratch.
+            raw_df = run_evaluations(config, questions, resume=effective_resume)
             typer.echo(f"[all] run phase complete ({len(raw_df)} rows)")
-
-        if effective_resume and _scored_exists(out_dir):
-            typer.echo("[all] resume enabled: found scored outputs, skipping score phase")
-            scored_df = _read_scored(out_dir)
-        else:
             deterministic_df = score_deterministic(
                 raw_df,
                 bertscore_model=config.bertscore_model,
@@ -297,10 +315,8 @@ def run_all(
             )
             typer.echo("[all] normalization + deterministic scoring complete")
             scored_df = apply_llm_judge(deterministic_df, config)
-            out_path_parquet = out_dir / "scored_responses.parquet"
-            out_path_csv = out_dir / "scored_responses.csv"
-            scored_df.to_parquet(out_path_parquet, index=False)
-            scored_df.to_csv(out_path_csv, index=False)
+            scored_df.to_parquet(out_dir / "scored_responses.parquet", index=False)
+            scored_df.to_csv(out_dir / "scored_responses.csv", index=False)
             typer.echo("[all] score phase complete")
 
         if effective_resume and _report_exists(out_dir):

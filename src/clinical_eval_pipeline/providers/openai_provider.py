@@ -5,6 +5,7 @@ import time
 from typing import Any
 
 from clinical_eval_pipeline.config import GenerationConfig
+from clinical_eval_pipeline.providers.retry import call_with_retries
 
 
 class OpenAIProvider:
@@ -31,7 +32,14 @@ class OpenAIProvider:
             raise RuntimeError(
                 "OPENAI_API_KEY is not set; required for provider='openai'."
             )
-        self._client = OpenAI(api_key=api_key)
+        # Disable the SDK's own retries (max_retries=0) so our call_with_retries
+        # loop is the single, observable source of retry/backoff; apply the
+        # configured per-request timeout.
+        self._client = OpenAI(
+            api_key=api_key,
+            timeout=float(generation_config.timeout_seconds),
+            max_retries=0,
+        )
         self._cfg = generation_config
 
     def generate(
@@ -57,7 +65,11 @@ class OpenAIProvider:
             kwargs["seed"] = seed
 
         start = time.perf_counter()
-        completion = self._client.chat.completions.create(**kwargs)
+        completion = call_with_retries(
+            lambda: self._client.chat.completions.create(**kwargs),
+            retries=self._cfg.retries,
+            label=f"openai model={model}",
+        )
         elapsed_ns = int((time.perf_counter() - start) * 1_000_000_000)
 
         text = completion.choices[0].message.content or ""

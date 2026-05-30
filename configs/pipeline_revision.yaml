@@ -24,7 +24,7 @@ prompt_file: "data/gold_data.csv"
 shared_instruction: |
   You are a clinical expert. Answer in ≤6 sentences. Be direct.
   If uncertain, say so. Never recommend unsafe actions.
-runs_per_prompt: 3
+runs_per_prompt: 10
 deterministic_mode: false
 verbose: true
 resume: true
@@ -44,8 +44,10 @@ models:
   - name: "gemma3:12b"
   - name: "gemma3:4b"                    # same-size general-purpose control
   - name: "medaibase/medgemma1.5:4b"
-  # Closed-source reference model (OPENAI_API_KEY in .env; `pip install openai`)
-  - name: "gpt-4.1-mini"
+  # Closed-source reference model (OPENAI_API_KEY in .env; `pip install openai`).
+  # gpt-4.1-nano = smallest GPT-4.1 tier (supports `seed`); closest size-analogue
+  # to the 4-12B open models. Treated as an external reference, not a peer.
+  - name: "gpt-4.1-nano"
     provider: "openai"
   # - name: "claude-haiku-4-5"
   #   provider: "anthropic"              # no sampling seed (documented determinism caveat)

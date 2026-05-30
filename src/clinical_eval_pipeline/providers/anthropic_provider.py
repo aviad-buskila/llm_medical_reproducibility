@@ -5,6 +5,7 @@ import time
 from typing import Any
 
 from clinical_eval_pipeline.config import GenerationConfig
+from clinical_eval_pipeline.providers.retry import call_with_retries
 
 
 class AnthropicProvider:
@@ -31,7 +32,13 @@ class AnthropicProvider:
             raise RuntimeError(
                 "ANTHROPIC_API_KEY is not set; required for provider='anthropic'."
             )
-        self._client = anthropic.Anthropic(api_key=api_key)
+        # Disable the SDK's own retries so our call_with_retries loop is the
+        # single source of retry/backoff; apply the configured request timeout.
+        self._client = anthropic.Anthropic(
+            api_key=api_key,
+            timeout=float(generation_config.timeout_seconds),
+            max_retries=0,
+        )
         self._cfg = generation_config
 
     def generate(
@@ -52,7 +59,11 @@ class AnthropicProvider:
             kwargs["system"] = system
 
         start = time.perf_counter()
-        message = self._client.messages.create(**kwargs)
+        message = call_with_retries(
+            lambda: self._client.messages.create(**kwargs),
+            retries=self._cfg.retries,
+            label=f"anthropic model={model}",
+        )
         elapsed_ns = int((time.perf_counter() - start) * 1_000_000_000)
 
         text = "".join(
