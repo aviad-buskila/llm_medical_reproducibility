@@ -6,6 +6,10 @@ import sys
 import pandas as pd
 import typer
 
+from clinical_eval_pipeline.env import load_env
+
+load_env()
+
 from clinical_eval_pipeline.aggregate import compute_aggregates, save_aggregates
 from clinical_eval_pipeline.config import load_config
 from clinical_eval_pipeline.io_gold_csv import load_gold_csv
@@ -13,9 +17,36 @@ from clinical_eval_pipeline.logging_utils import tee_terminal_to_log
 from clinical_eval_pipeline.reporting import generate_figures, write_markdown_report
 from clinical_eval_pipeline.runner import run_evaluations
 from clinical_eval_pipeline.scoring.deterministic import score_deterministic
+from clinical_eval_pipeline.scoring.judge_reliability import run_judge_reliability
 from clinical_eval_pipeline.scoring.llm_judge import apply_llm_judge
+from clinical_eval_pipeline.scoring.semantic import compute_semantic_reproducibility
 
 app = typer.Typer(help="Clinical reproducibility evaluation pipeline (Ollama).")
+
+
+def _build_report(scored_df: pd.DataFrame, config, out_dir: Path) -> tuple[Path, Path]:
+    """Compute aggregates (incl. semantic reproducibility), figures and report."""
+    semantic_repro_df = None
+    if config.semantic_reproducibility:
+        semantic_repro_df = compute_semantic_reproducibility(
+            scored_df,
+            model_type=config.bertscore_model,
+            batch_size=config.bertscore_batch_size,
+            max_pairs_per_group=config.semantic_max_pairs_per_group,
+            seed=config.random_seed or 42,
+        )
+    aggregate_df = compute_aggregates(scored_df, semantic_repro_df)
+    agg_path = save_aggregates(aggregate_df, out_dir)
+    generate_figures(scored_df, aggregate_df, out_dir)
+    report_path = write_markdown_report(
+        scored_df,
+        aggregate_df,
+        out_dir,
+        n_boot=config.bootstrap_resamples,
+        ci=config.bootstrap_ci,
+        seed=config.random_seed or 42,
+    )
+    return agg_path, report_path
 
 
 def _read_raw(config_path: str) -> tuple[pd.DataFrame, str]:
@@ -168,14 +199,62 @@ def report(
         scored_df = _read_scored(out_dir)
 
         typer.echo(f"[report] loaded {len(scored_df)} scored rows")
-        aggregate_df = compute_aggregates(scored_df)
-        agg_path = save_aggregates(aggregate_df, out_dir)
+        agg_path, report_path = _build_report(scored_df, config, out_dir)
         typer.echo("[report] aggregate metrics computed")
-        generate_figures(scored_df, aggregate_df, out_dir)
-        report_path = write_markdown_report(scored_df, aggregate_df, out_dir)
         typer.echo(f"[report] saved aggregates -> {agg_path}")
         typer.echo(f"[report] saved report -> {report_path}")
         typer.echo(f"[report] terminal output log -> {log_path}")
+
+
+@app.command(name="export-sample")
+def export_sample(
+    config_path: str = "configs/pipeline.yaml",
+    sample_random: int = typer.Option(50, "--sample-random", min=1),
+    sample_seed: int = typer.Option(42, "--sample-seed"),
+    out: str = typer.Option("outputs/sampled_questions.csv", "--out"),
+) -> None:
+    """Export the exact deterministically sampled question set (supplementary S1).
+
+    Reuses the same load + ``df.sample(random_state=...)`` path as the run
+    commands, so the written file is precisely the evaluation set, making the
+    sampling fully reproducible and documentable.
+    """
+    config = load_config(config_path)
+    questions = load_gold_csv(config.prompt_file)
+    sampled = _apply_sampling(
+        questions, sample=None, sample_random=sample_random, sample_seed=sample_seed
+    )
+    out_path = Path(out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    sampled.to_csv(out_path, index=False)
+    typer.echo(
+        f"[export-sample] wrote {len(sampled)} questions sampled from "
+        f"{config.prompt_file} (n={sample_random}, seed={sample_seed}) -> {out_path}"
+    )
+
+
+@app.command(name="judge-reliability")
+def judge_reliability(
+    config_path: str = "configs/pipeline.yaml",
+) -> None:
+    """Re-judge a stratified subset K times to quantify judge stochasticity."""
+    config = load_config(config_path)
+    command_line = " ".join(sys.argv)
+    with tee_terminal_to_log(config.output.output_dir, config.output.log_subdir, command_line) as log_path:
+        out_dir = Path(config.output.output_dir)
+        scored_df = _read_scored(out_dir)
+        typer.echo(
+            f"[judge-reliability] loaded {len(scored_df)} scored rows; "
+            f"subset={config.judge.reliability_subset} passes={config.judge.reliability_passes}"
+        )
+        long_scores, summary = run_judge_reliability(scored_df, config)
+        scores_path = out_dir / "judge_reliability_scores.csv"
+        summary_path = out_dir / "judge_reliability_summary.csv"
+        long_scores.to_csv(scores_path, index=False)
+        pd.DataFrame([summary]).to_csv(summary_path, index=False)
+        typer.echo(f"[judge-reliability] summary: {summary}")
+        typer.echo(f"[judge-reliability] saved -> {scores_path} and {summary_path}")
+        typer.echo(f"[judge-reliability] terminal output log -> {log_path}")
 
 
 @app.command(name="all")
@@ -227,10 +306,7 @@ def run_all(
         if effective_resume and _report_exists(out_dir):
             typer.echo("[all] resume enabled: found report artifacts, skipping report phase")
         else:
-            aggregate_df = compute_aggregates(scored_df)
-            agg_path = save_aggregates(aggregate_df, out_dir)
-            generate_figures(scored_df, aggregate_df, out_dir)
-            report_path = write_markdown_report(scored_df, aggregate_df, out_dir)
+            agg_path, report_path = _build_report(scored_df, config, out_dir)
             typer.echo(f"[all] report phase complete ({report_path})")
             typer.echo(f"[all] aggregates -> {agg_path}")
         typer.echo(f"[all] terminal output log -> {log_path}")

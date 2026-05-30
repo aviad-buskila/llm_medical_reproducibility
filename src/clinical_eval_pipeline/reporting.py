@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
+from clinical_eval_pipeline.aggregate import model_level_summary
 from clinical_eval_pipeline.scoring.deterministic import normalize_text
 
 
@@ -15,6 +16,20 @@ def _df_to_markdown_or_fallback(df: pd.DataFrame, **kwargs) -> str:
     except ImportError:
         # Fallback keeps report generation working even if tabulate is missing.
         return df.to_string(index=kwargs.get("index", True))
+
+
+def _format_mean_ci(summary: pd.DataFrame, cols: list[str], labels: dict[str, str]) -> pd.DataFrame:
+    """Render a model_level_summary as a 'mean [lo, hi]' table for the given cols."""
+    cols = [c for c in cols if f"{c}_mean" in summary.columns]
+    out = pd.DataFrame({"Model": summary["model"].values})
+    for col in cols:
+        out[labels.get(col, col)] = [
+            f"{m:.3f} [{lo:.3f}, {hi:.3f}]"
+            for m, lo, hi in zip(
+                summary[f"{col}_mean"], summary[f"{col}_ci_low"], summary[f"{col}_ci_high"]
+            )
+        ]
+    return out
 
 
 def _pairwise_model_similarity(scored_df: pd.DataFrame) -> pd.DataFrame:
@@ -94,10 +109,57 @@ def write_markdown_report(
     scored_df: pd.DataFrame,
     aggregate_df: pd.DataFrame,
     output_dir: str | Path,
+    *,
+    n_boot: int = 1000,
+    ci: float = 0.95,
+    seed: int = 42,
 ) -> Path:
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     report_path = out_dir / "report.md"
+
+    # Model-level summaries with clustered (per-question) bootstrap CIs. These
+    # are the publication Tables 1 & 2: a metric's point estimate is the mean of
+    # its per-question values and the interval is a percentile bootstrap over
+    # questions. See model_level_summary() for the derivation.
+    ci_pct = int(round(ci * 100))
+    quality_q_cols = [
+        "bertscore_f1_mean",
+        "token_f1_mean",
+        "rouge_l_mean",
+        "judge_score_mean",
+    ]
+    quality_summary = model_level_summary(
+        aggregate_df, quality_q_cols, n_boot=n_boot, ci=ci, seed=seed
+    )
+    quality_ci_table = _format_mean_ci(
+        quality_summary,
+        quality_q_cols,
+        {
+            "bertscore_f1_mean": "BERTScore F1",
+            "token_f1_mean": "Token F1",
+            "rouge_l_mean": "ROUGE-L",
+            "judge_score_mean": "Judge",
+        },
+    )
+
+    repro_q_cols = [
+        "normalized_self_agreement_rate",
+        "normalized_response_uniqueness_rate",
+        "semantic_self_similarity_mean",
+    ]
+    repro_summary = model_level_summary(
+        aggregate_df, repro_q_cols, n_boot=n_boot, ci=ci, seed=seed
+    )
+    repro_ci_table = _format_mean_ci(
+        repro_summary,
+        repro_q_cols,
+        {
+            "normalized_self_agreement_rate": "Self-agreement (lexical) ↑",
+            "normalized_response_uniqueness_rate": "Uniqueness (lexical) ↓",
+            "semantic_self_similarity_mean": "Semantic self-similarity ↑",
+        },
+    )
 
     quality_cols = [
         "token_f1",
@@ -188,6 +250,25 @@ def write_markdown_report(
 
     lines: list[str] = [
         "# Clinical Reproducibility Evaluation Report",
+        "",
+        f"## Table 1 - Quality (model-level mean with {ci_pct}% bootstrap CI)",
+        "",
+        "Each cell is `mean [low, high]`. The point estimate is the mean across "
+        "questions of the per-question mean metric (equal weight per question); "
+        "the interval is a percentile bootstrap resampling questions with "
+        f"replacement ({n_boot} resamples). Higher is better.",
+        "",
+        _df_to_markdown_or_fallback(quality_ci_table, index=False),
+        "",
+        f"## Table 2 - Reproducibility (model-level mean with {ci_pct}% bootstrap CI)",
+        "",
+        "Each cell is `mean [low, high]`, bootstrap over questions. "
+        "Lexical self-agreement = fraction of runs matching the modal normalized "
+        "output (↑ better); lexical uniqueness = distinct normalized outputs / N "
+        "(↓ better); semantic self-similarity = mean pairwise BERTScore-F1 across "
+        "runs (↑ better, robust to paraphrase).",
+        "",
+        _df_to_markdown_or_fallback(repro_ci_table, index=False),
         "",
         "## Part 1 - Model-vs-Gold Quality (Average and Median)",
         "",

@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, ValidationError
 class ModelConfig(BaseModel):
     name: str
     runs_per_prompt: int | None = Field(default=None, ge=1)
+    provider: str = "ollama"
 
 
 class GenerationConfig(BaseModel):
@@ -29,6 +30,10 @@ class JudgeConfig(BaseModel):
         "Given QUESTION, GOLD_ANSWER and MODEL_ANSWER, score factual correctness from 0 to 1.\n"
         "Respond only as: score=<float> rationale=<brief reason>"
     )
+    # Judge-reliability sub-study (Reviewer #2): re-judge a stratified subset of
+    # responses multiple times to quantify the judge's own stochasticity.
+    reliability_passes: int = Field(default=5, ge=2)
+    reliability_subset: int = Field(default=25, ge=1)
 
 
 class OutputConfig(BaseModel):
@@ -55,6 +60,10 @@ class PipelineConfig(BaseModel):
     bertscore_batch_size: int = Field(default=8, ge=1)
     random_seed: int | None = None
     report_format: Literal["markdown"] = "markdown"
+    semantic_reproducibility: bool = True
+    semantic_max_pairs_per_group: int = Field(default=45, ge=1)
+    bootstrap_resamples: int = Field(default=1000, ge=1)
+    bootstrap_ci: float = Field(default=0.95, gt=0.0, lt=1.0)
 
 
 def load_config(path: str | Path) -> PipelineConfig:

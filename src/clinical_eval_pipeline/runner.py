@@ -8,7 +8,7 @@ from typing import Any
 import pandas as pd
 
 from clinical_eval_pipeline.config import PipelineConfig
-from clinical_eval_pipeline.ollama_client import OllamaClient
+from clinical_eval_pipeline.providers import build_provider
 
 
 def _now_iso() -> str:
@@ -19,11 +19,6 @@ def run_evaluations(config: PipelineConfig, questions: pd.DataFrame) -> pd.DataF
     out_dir = Path(config.output.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    client = OllamaClient(
-        base_url=config.ollama_base_url,
-        generation_config=config.generation,
-    )
-
     rows: list[dict[str, Any]] = []
     total_calls = sum((m.runs_per_prompt or config.runs_per_prompt) * len(questions) for m in config.models)
     completed_calls = 0
@@ -31,9 +26,15 @@ def run_evaluations(config: PipelineConfig, questions: pd.DataFrame) -> pd.DataF
 
     for model_cfg in config.models:
         runs = model_cfg.runs_per_prompt or config.runs_per_prompt
+        provider = build_provider(
+            model_cfg.provider,
+            base_url=config.ollama_base_url,
+            generation_config=config.generation,
+        )
         if config.verbose:
             print(
-                f"[run] model={model_cfg.name} runs_per_prompt={runs} prompts={len(questions)}",
+                f"[run] model={model_cfg.name} provider={model_cfg.provider} "
+                f"runs_per_prompt={runs} prompts={len(questions)}",
                 flush=True,
             )
         for _, question_row in questions.iterrows():
@@ -48,7 +49,7 @@ def run_evaluations(config: PipelineConfig, questions: pd.DataFrame) -> pd.DataF
                         f"model={model_cfg.name} question_id={question_row['id']} run={run_index}",
                         flush=True,
                     )
-                response = client.generate(
+                response = provider.generate(
                     model=model_cfg.name,
                     prompt=str(question_row["question"]),
                     seed=seed,
@@ -58,6 +59,7 @@ def run_evaluations(config: PipelineConfig, questions: pd.DataFrame) -> pd.DataF
                     {
                         "timestamp_utc": _now_iso(),
                         "model": model_cfg.name,
+                        "provider": model_cfg.provider,
                         "question_id": question_row["id"],
                         "question": question_row["question"],
                         "gold_answer": question_row["gold_answer"],

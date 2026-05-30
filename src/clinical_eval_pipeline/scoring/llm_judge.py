@@ -23,6 +23,53 @@ def _extract_score(text: str) -> float | None:
     return None
 
 
+def score_response(
+    client: OllamaClient,
+    judge_cfg: JudgeConfig,
+    question: str,
+    gold_answer: str,
+    model_answer: str,
+) -> tuple[float | None, str]:
+    """Run the judge once on a single response and return (parsed_score, text).
+
+    Shared by the main scoring pass and the judge-reliability sub-study so both
+    use an identical prompt, fallback and parsing path.
+    """
+    judge_payload = {
+        "instructions": judge_cfg.rubric_prompt,
+        "question": question,
+        "gold_answer": gold_answer,
+        "model_answer": model_answer,
+        "output_format": {"score": "float_0_to_1", "rationale": "short_string"},
+    }
+    judge_prompt = (
+        "You are a strict evaluator. Return JSON only with keys: score, rationale.\n"
+        f"{json.dumps(judge_payload, ensure_ascii=False)}"
+    )
+
+    if judge_cfg.use_chat_api:
+        result = client.chat(model=judge_cfg.model, user_message=judge_prompt)
+    else:
+        result = client.generate(model=judge_cfg.model, prompt=judge_prompt)
+    judge_text = str(result.get("response", "")).strip()
+    if not judge_text:
+        # One fallback attempt with a plain text format in case model struggles with JSON.
+        fallback_prompt = (
+            f"{judge_cfg.rubric_prompt}\n\n"
+            "Return exactly in one line: score=<float> rationale=<short reason>\n\n"
+            f"QUESTION: {question}\n"
+            f"GOLD_ANSWER: {gold_answer}\n"
+            f"MODEL_ANSWER: {model_answer}\n"
+        )
+        if judge_cfg.use_chat_api:
+            result = client.chat(model=judge_cfg.model, user_message=fallback_prompt)
+        else:
+            result = client.generate(model=judge_cfg.model, prompt=fallback_prompt)
+        judge_text = str(result.get("response", "")).strip()
+
+    return _extract_score(judge_text), judge_text
+
+
 def apply_llm_judge(scored_df: pd.DataFrame, config: PipelineConfig) -> pd.DataFrame:
     if not config.judge.enabled:
         out = scored_df.copy()
@@ -47,51 +94,19 @@ def apply_llm_judge(scored_df: pd.DataFrame, config: PipelineConfig) -> pd.DataF
                 f"judge_model={judge_cfg.model} mode={'chat' if judge_cfg.use_chat_api else 'generate'}",
                 flush=True,
             )
-        judge_payload = {
-            "instructions": judge_cfg.rubric_prompt,
-            "question": str(row["question"]),
-            "gold_answer": str(row["gold_answer"]),
-            "model_answer": str(row["response_text"]),
-            "output_format": {"score": "float_0_to_1", "rationale": "short_string"},
-        }
-        judge_prompt = (
-            "You are a strict evaluator. Return JSON only with keys: score, rationale.\n"
-            f"{json.dumps(judge_payload, ensure_ascii=False)}"
+        parsed, judge_text = score_response(
+            client,
+            judge_cfg,
+            question=str(row["question"]),
+            gold_answer=str(row["gold_answer"]),
+            model_answer=str(row["response_text"]),
         )
-
-        if judge_cfg.use_chat_api:
-            result = client.chat(model=judge_cfg.model, user_message=judge_prompt)
-        else:
-            result = client.generate(model=judge_cfg.model, prompt=judge_prompt)
-        judge_text = str(result.get("response", "")).strip()
-        if not judge_text:
-            if config.verbose:
-                print(
-                    f"[judge][warn] empty response on primary prompt for target_model={row['model']} "
-                    f"question_id={row['question_id']} - trying fallback prompt",
-                    flush=True,
-                )
-            # One fallback attempt with a plain text format in case model struggles with JSON.
-            fallback_prompt = (
-                f"{judge_cfg.rubric_prompt}\n\n"
-                "Return exactly in one line: score=<float> rationale=<short reason>\n\n"
-                f"QUESTION: {row['question']}\n"
-                f"GOLD_ANSWER: {row['gold_answer']}\n"
-                f"MODEL_ANSWER: {row['response_text']}\n"
-            )
-            if judge_cfg.use_chat_api:
-                result = client.chat(model=judge_cfg.model, user_message=fallback_prompt)
-            else:
-                result = client.generate(model=judge_cfg.model, prompt=fallback_prompt)
-            judge_text = str(result.get("response", "")).strip()
         if not judge_text:
             print(
                 f"[judge][warn] empty response after fallback judge_model={judge_cfg.model} "
                 f"target_model={row['model']} question_id={row['question_id']}",
                 flush=True,
             )
-
-        parsed = _extract_score(judge_text)
         if parsed is None:
             parse_failures += 1
             snippet = judge_text.replace("\n", " ")[:220]
