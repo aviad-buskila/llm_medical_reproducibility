@@ -24,7 +24,7 @@ prompt_file: "data/gold_data.csv"
 shared_instruction: |
   You are a clinical expert. Answer in ≤6 sentences. Be direct.
   If uncertain, say so. Never recommend unsafe actions.
-runs_per_prompt: 10
+runs_per_prompt: 3
 deterministic_mode: false
 verbose: true
 resume: true
