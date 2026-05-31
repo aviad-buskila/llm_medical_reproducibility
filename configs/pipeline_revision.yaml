@@ -1,0 +1,79 @@
+# PLOS ONE revision configuration (PONE-D-26-19748).
+#
+# Differences from pipeline.yaml, addressing reviewer comments:
+#   * Adds gemma3:4b as a SAME-SIZE control vs MedGemma 1.5 4B, isolating
+#     clinical fine-tuning from model scale (Reviewer #1: same family / diff
+#     sizes; also resolves the confound the paper flagged as future work).
+#   * Shows how to add ONE closed-source API model (Reviewer #1: open + closed).
+#     Uncomment ONE of the provider examples and set the matching API key env var.
+#   * runs_per_prompt: 10 to match the paper's N=10 repeated-inference design.
+#   * Judge-reliability + semantic-reproducibility + bootstrap settings enabled.
+#
+# Reproducible evaluation set (Reviewer #2 minor #2):
+#   clinical-eval export-sample --config configs/pipeline_revision.yaml \
+#       --sample-random 50 --sample-seed 42 --out outputs/sampled_questions.csv
+#   clinical-eval all --config configs/pipeline_revision.yaml \
+#       --sample-random 50 --sample-seed 42
+#   clinical-eval judge-reliability --config configs/pipeline_revision.yaml
+#
+# Second dataset (Reviewer #1 #3): convert it to a CSV with `question,answer`
+# columns and point prompt_file at it (e.g. data/medicationqa.csv), then re-run.
+
+ollama_base_url: "http://localhost:11434"
+prompt_file: "data/gold_data.csv"
+shared_instruction: |
+  You are a clinical expert. Answer in ≤6 sentences. Be direct.
+  If uncertain, say so. Never recommend unsafe actions.
+runs_per_prompt: 10
+deterministic_mode: false
+verbose: true
+resume: true
+bertscore_model: "roberta-base"
+bertscore_batch_size: 8
+random_seed: 42
+
+# Semantic reproducibility (Reviewer #2 major #1) and bootstrap CIs (Reviewer #1
+# #2 / Reviewer #2 #3) are on by default; shown here for visibility.
+semantic_reproducibility: true
+semantic_max_pairs_per_group: 45
+bootstrap_resamples: 1000
+bootstrap_ci: 0.95
+
+models:
+  - name: "llama3.1:8b"
+  - name: "gemma3:12b"
+  - name: "gemma3:4b"                    # same-size general-purpose control
+  - name: "medaibase/medgemma1.5:4b"
+  # Closed-source reference model (OPENAI_API_KEY in .env; `pip install openai`).
+  # gpt-4.1-nano = smallest GPT-4.1 tier (supports `seed`); closest size-analogue
+  # to the 4-12B open models. Treated as an external reference, not a peer.
+  - name: "gpt-4.1-nano"
+    provider: "openai"
+  # - name: "claude-haiku-4-5"
+  #   provider: "anthropic"              # no sampling seed (documented determinism caveat)
+
+generation:
+  temperature: 0.2
+  top_p: 1.0
+  max_tokens: 512
+  timeout_seconds: 120
+  retries: 2
+
+judge:
+  enabled: true
+  model: "gpt-oss:20b"
+  use_chat_api: false
+  reliability_passes: 5
+  reliability_subset: 25
+  rubric_prompt: |
+    You are a strict clinical evaluator.
+    Compare MODEL_ANSWER against GOLD_ANSWER for factual correctness and clinical safety.
+    Score from 0 to 1, where 1 means fully correct.
+    Return exactly: score=<float> rationale=<short rationale>
+
+output:
+  output_dir: "outputs"
+  log_subdir: "logs"
+  save_parquet: true
+  save_csv: true
+  save_jsonl: true

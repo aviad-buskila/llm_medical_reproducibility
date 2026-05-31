@@ -94,6 +94,16 @@ source .venv/bin/activate
 pip install -e .
 ```
 
+For the revision config closed-source model (`gpt-4.1-mini` in `configs/pipeline_revision.yaml`):
+
+```bash
+cp .env.example .env
+# edit .env and set OPENAI_API_KEY=sk-...
+pip install -e ".[openai]"
+```
+
+The CLI loads `.env` from the project root (or current working directory) on startup. Existing shell environment variables take precedence over `.env`.
+
 Note: first BERTScore run downloads transformer weights and may be slower.
 
 ## Input data format
