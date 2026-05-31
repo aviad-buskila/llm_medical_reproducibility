@@ -47,7 +47,7 @@ We present a practical, open-source evaluation framework for
 assessing small, locally-deployable open-weight LLMs on medical
 question answering, treating \emph{reproducibility} as a first-class
 metric alongside lexical and semantic accuracy.
-Our pipeline computes eight quality metrics, including BERTScore,
+Our pipeline computes a comprehensive suite of quality metrics, including BERTScore,
 ROUGE-L, and an LLM-as-judge rubric, together with complementary
 lexical and semantic within-model reproducibility metrics derived
 from repeated inference ($N{=}10$ runs per question).
@@ -383,7 +383,7 @@ three subcommands:
   \item \texttt{clinical-eval score}: applies the full metric
         suite to every stored response.
   \item \texttt{clinical-eval report}: aggregates scored
-        responses and renders the six-section Markdown report.
+        responses and renders the Markdown report.
 \end{itemize}
 
 The separation of generation from scoring is a key design choice:
@@ -404,7 +404,7 @@ reproducibility.
 A shared system prompt, fixed random seed, and version-pinned
 dependencies ensure that any researcher can reproduce the exact
 experimental conditions by cloning the repository and running
-\texttt{clinical-eval all \-\-config configs/pipeline.yaml}.
+\texttt{clinical-eval all \-\-config-path configs/pipeline.yaml}.
 
 % ---- 3. Results ---------------------------------------------
 \section{Results}

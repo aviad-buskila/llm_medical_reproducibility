@@ -1,7 +1,7 @@
 \documentclass[11pt]{article}
 %DIF LATEXDIFF DIFFERENCE FILE
 %DIF DEL /Users/aviadbuskila/Downloads/main.tex   Fri May 29 20:24:34 2026
-%DIF ADD paper/main.tex                           Sun May 31 09:38:30 2026
+%DIF ADD paper/main.tex                           Sun May 31 10:08:34 2026
 
 % ---- Packages -----------------------------------------------
 \usepackage[margin=0.75in,top=0.9in,bottom=0.9in]{geometry}
@@ -141,7 +141,7 @@ We present a practical, open-source evaluation framework for
 assessing small, locally-deployable open-weight LLMs on medical
 question answering, treating \emph{reproducibility} as a first-class
 metric alongside lexical and semantic accuracy.
-Our pipeline computes eight quality metrics, including BERTScore,
+Our pipeline computes \DIFdelbegin \DIFdel{eight }\DIFdelend \DIFaddbegin \DIFadd{a comprehensive suite of }\DIFaddend quality metrics, including BERTScore,
 ROUGE-L, and an LLM-as-judge rubric, together with \DIFdelbegin \DIFdel{two
 }\DIFdelend \DIFaddbegin \DIFadd{complementary
 lexical and semantic }\DIFaddend within-model reproducibility metrics derived
@@ -501,7 +501,7 @@ three subcommands:
   \item \texttt{clinical-eval score}: applies the full metric
         suite to every stored response.
   \item \texttt{clinical-eval report}: aggregates scored
-        responses and renders the six-section Markdown report.
+        responses and renders the \DIFdelbegin \DIFdel{six-section }\DIFdelend Markdown report.
 \end{itemize}
 
 The separation of generation from scoring is a key design choice:
@@ -523,7 +523,7 @@ reproducibility.
 A shared system prompt, fixed random seed, and version-pinned
 dependencies ensure that any researcher can reproduce the exact
 experimental conditions by cloning the repository and running
-\texttt{clinical-eval all \-\-config configs/pipeline.yaml}.
+\texttt{clinical-eval all \-\-config\DIFaddbegin \DIFadd{-path}\DIFaddend  configs/pipeline.yaml}.
 
 % ---- 3. Results ---------------------------------------------
 \section{Results}
