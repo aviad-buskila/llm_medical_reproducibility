@@ -121,18 +121,25 @@ Our pipeline computes eight quality metrics, including BERTScore,
 ROUGE-L, and an LLM-as-judge rubric, together with complementary
 lexical and semantic within-model reproducibility metrics derived
 from repeated inference ($N{=}10$ runs per question).
-Evaluating three models
-(Llama 3.1 8B, Gemma 3 12B, MedGemma 1.5 4B) on 50 MedQuAD
-questions ($N{=}1{,}500$ total responses) reveals that despite
-low-temperature generation ($T{=}0.2$), self-agreement across runs
-reaches at most 0.20, while 87--97\% of all outputs per model are
-unique, a safety gap that single-pass benchmarks entirely miss.
-We further find that the clinically fine-tuned
-MedGemma 1.5 4B underperforms the larger general-purpose models
-on both quality and reproducibility; however, because MedGemma is also
-the smallest model (4B vs.\ 8B and 12B), this comparison confounds
-domain fine-tuning with model scale, and a same-size comparison
-is needed to isolate the effect of clinical specialization.
+Evaluating four open-weight models (Llama 3.1 8B, Gemma 3 12B,
+Gemma 3 4B, and the clinically fine-tuned MedGemma 1.5 4B), with the
+closed GPT-4.1-nano as an external reference, on two consumer-health
+benchmarks (MedQuAD and MedicationQA; 50 questions each, 10 runs per
+question, 5{,}000 responses in total), we find that low-temperature
+generation ($T{=}0.2$) does not yield reproducible outputs: lexical
+self-agreement is only 0.11--0.26 and 76--99\% of outputs per model are
+unique. Yet the mean pairwise \emph{semantic} self-similarity across
+runs is 0.94--0.97 for every model on both datasets, showing that this
+run-to-run variability is overwhelmingly paraphrastic rather than
+meaning-level---a distinction that purely lexical, single-pass
+benchmarks miss entirely, and one that holds even for the closed
+reference model. With the same-size control included, we further find
+that model scale, not clinical fine-tuning, drives quality: MedGemma
+1.5 4B does not improve over its same-size general-purpose sibling
+Gemma 3 4B, while the larger Gemma 3 12B leads the open models. All
+model-level estimates are reported with clustered bootstrap confidence
+intervals, and we quantify the reliability of the LLM judge itself
+(ICC(1)~$=$~0.94 on MedQuAD, 0.69 on MedicationQA).
 We describe the methodology in sufficient detail for practitioners
 to replicate or extend the evaluation for their own model-selection
 workflows. All code, data processing pipelines, and experiments are
@@ -186,19 +193,24 @@ accuracy and leave run-to-run variance unmeasured.
 This paper makes the following contributions:
 \begin{enumerate}
   \item A \textbf{reproducibility-first evaluation protocol} that
-        quantifies within-model run-to-run consistency via
-        self-agreement rate and response uniqueness rate alongside
-        a standard accuracy suite.
+        quantifies within-model run-to-run consistency via lexical
+        self-agreement and response-uniqueness rates \emph{and} a
+        semantic self-similarity measure, alongside a standard accuracy
+        suite, with all estimates reported as bootstrap confidence
+        intervals.
   \item A \textbf{modular, resumable, open-source pipeline} implementing
         the protocol with a simple three-stage CLI
         (\texttt{run\;$\to$\;score\;$\to$\;report}).
-  \item \textbf{Empirical results} on three small open-weight models
-        ($N{=}1{,}500$ responses across 50 MedQuAD questions),
-        demonstrating that reproducibility failures persist even in
-        the near-deterministic temperature regime. We also observe that
-        the clinically fine-tuned model underperforms larger
-        general-purpose models, though this finding is confounded by
-        a 2--3$\times$ parameter count difference.
+  \item \textbf{Empirical results} on five models---four small
+        open-weight models spanning 4B--12B parameters plus a closed
+        reference---across two consumer-health datasets ($N{=}5{,}000$
+        responses; 50 questions $\times$ 10 runs per model per dataset),
+        demonstrating that reproducibility failures persist even in the
+        near-deterministic temperature regime, that run-to-run
+        divergence is largely paraphrastic (high semantic
+        self-similarity despite low lexical agreement), and that---using
+        a same-size control---model scale rather than clinical
+        fine-tuning drives quality.
 \end{enumerate}
 
 % ---- 2. Related Work -----------------------------------------
@@ -252,7 +264,7 @@ inherent stochasticity of the judge itself as a limitation
 % ---- 3. Methodology -----------------------------------------
 \section*{Materials and methods}
 
-\subsection*{Dataset}
+\subsection*{Datasets}
 
 We use \textbf{MedQuAD}~\cite{abacha2019mqa}, a collection of
 16,412 medical question-answer pairs curated from fourteen NIH online
@@ -272,6 +284,16 @@ that motivate this work: it provides clinically validated reference
 answers (which user-generated forum posts lack) while remaining
 representative of lay health information needs.
 
+To test whether our findings generalize beyond a single corpus, we add
+a second benchmark, \textbf{MedicationQA}~\cite{abacha2019medication}, a
+set of 689 consumer medication questions (covering dosing, interactions,
+administration, and side effects) paired with answers curated from
+authoritative drug-information sources (the MedInfo~2019 collection).
+MedicationQA is narrower and more drug-specific than MedQuAD and its
+reference answers are short and factual, providing a complementary, less
+forgiving stress test. We apply the identical sampling, inference, and
+scoring pipeline to both datasets.
+
 For reproducible sampling, we draw question subsets using a fixed
 random seed (seed\,=\,42) so that any researcher can reconstruct the
 exact evaluation set. To make this guarantee precise, we document the
@@ -284,15 +306,17 @@ sampling depends on the dataset version, row ordering, and the specific
 sampling implementation, we additionally release the exact sampled
 question set as Supporting Information (S1 File), regenerable with one
 command (\texttt{clinical-eval export-sample -{}-sample-random 50 -{}-sample-seed 42}).
-We evaluate $N{=}50$ randomly sampled questions, each subjected to
-10 repeated inference runs per model, yielding 500 responses per
-model (1,500 total).
+We evaluate $N{=}50$ randomly sampled questions \emph{per dataset}, each
+subjected to 10 repeated inference runs per model, yielding 500
+responses per model per dataset (2{,}500 per dataset; 5{,}000 in total
+across the five models and two datasets).
 
 \subsection*{Models and inference setup}
 
-We select three locally-deployable open-weight models to span a range
-of parameter counts and domain-specialization strategies, all served
-via the Ollama runtime~\cite{ollama}:
+We select four locally-deployable open-weight models spanning
+4B--12B parameters and two domain-specialization strategies, all served
+via the Ollama runtime~\cite{ollama}, and include one closed-source API
+model as an external reference point:
 
 \begin{itemize}
   \item \textbf{Llama 3.1 8B}~\cite{dubey2024llama3}:
@@ -301,13 +325,29 @@ via the Ollama runtime~\cite{ollama}:
   \item \textbf{Gemma 3 12B}~\cite{team2024gemma}:
         Google DeepMind's instruction-tuned model at 12B parameters.
         Provides a larger general-purpose comparison point.
+  \item \textbf{Gemma 3 4B}~\cite{team2024gemma}:
+        The 4B instruction-tuned sibling of Gemma 3 12B. It serves a
+        dual role: a \emph{scale} control against Gemma 3 12B and,
+        crucially, a \emph{same-size} general-purpose control against
+        MedGemma 1.5 4B, which together isolate model scale from
+        clinical fine-tuning.
   \item \textbf{MedGemma 1.5 4B}~\cite{medgemma2024}:
         A Gemma-based 4B model fine-tuned on clinical corpora,
         testing the hypothesis that domain specialization compensates
-        for smaller scale.
+        for smaller scale---now tested directly against its same-size
+        base model, Gemma 3 4B.
+  \item \textbf{GPT-4.1-nano} (closed-source reference):
+        OpenAI's smallest GPT-4.1-tier model, accessed via the vendor
+        API. We include it solely as an external reference to contextualize
+        the open models, \emph{not} as a locally-deployable peer; it is
+        therefore reported separately and excluded from ``best open
+        model'' comparisons. Because closed APIs are versioned and may
+        change without notice and their seed support is best-effort, we
+        make no determinism claims for this model and run it only under
+        the same decoding settings as the open models.
 \end{itemize}
 
-All three models receive an identical, fixed system instruction:
+All models receive an identical, fixed system instruction:
 \textit{``You are a clinical expert. Answer in $\leq$6\,sentences.
 Be direct. If uncertain, say so. Never recommend unsafe actions.''}
 Holding the system prompt constant isolates model behavior from
@@ -442,8 +482,11 @@ experimental conditions by cloning the repository and running
 \section*{Results}
 \label{sec:results}
 
-Tables~\ref{tab:quality} and~\ref{tab:repro} summarize results
-across 1,500 responses (50 questions $\times$ 10 runs $\times$ 3 models).
+Tables~\ref{tab:quality} and~\ref{tab:repro} summarize results across
+both datasets (50 questions $\times$ 10 runs $\times$ 5 models per
+dataset; 2{,}500 responses per dataset, 5{,}000 in total), and
+Figs~\ref{fig:repro} and~\ref{fig:quality} visualize the same
+model-level estimates with their bootstrap confidence intervals.
 
 \paragraph{Aggregation and uncertainty.}
 We state the aggregation procedure explicitly. For the quality metrics,
@@ -456,97 +499,181 @@ every model-level value is reported with a 95\% confidence interval
 obtained by a clustered percentile bootstrap that resamples questions
 with replacement (1{,}000 resamples); per-question standard deviations
 are additionally available in the released aggregates.
-% TODO(after expanded runs): regenerate Tables 1-2 to show "mean [95% CI]",
-% add the semantic self-similarity column, the Gemma 3 4B same-size control,
-% the closed-source reference model, and the MedicationQA results.
 
 \begin{table}[!ht]
+\begin{adjustwidth}{-2.25in}{0in}
 \centering
-\caption{{\bf Quality metrics ($n{=}50$ questions, avg.\ over 10 runs).}
-Bold indicates best per column.}
+\caption{{\bf Quality metrics: model output vs.\ gold answer, mean [95\% CI].}
+Per dataset, $n{=}50$ questions $\times$ 10 runs. Each value is the
+across-question mean with a clustered percentile-bootstrap 95\% confidence
+interval (1{,}000 resamples, resampling questions). Bold = best among the
+open-weight models per column, per dataset.}
 \label{tab:quality}
-\begin{tabular}{lccc}
+\footnotesize
+\begin{tabular}{lcccc}
 \toprule
-\textbf{Model} & \textbf{BERTScore} & \textbf{Token F1} & \textbf{Judge} \\
+\textbf{Model} & \textbf{BERTScore F1} & \textbf{Token F1} & \textbf{ROUGE-L} & \textbf{Judge} \\
 \midrule
-Llama 3.1 8B      & \textbf{0.852} & \textbf{0.277} & 0.592 \\
-Gemma 3 12B       & 0.847 & 0.239 & \textbf{0.600} \\
-MedGemma 1.5 4B   & 0.848 & 0.249 & 0.459 \\
+\multicolumn{5}{l}{\emph{MedQuAD}}\\
+Llama 3.1 8B      & \textbf{0.848} [0.837, 0.857] & \textbf{0.287} [0.264, 0.311] & \textbf{0.172} [0.154, 0.189] & 0.565 [0.480, 0.643] \\
+Gemma 3 12B       & 0.843 [0.833, 0.852] & 0.238 [0.218, 0.258] & 0.147 [0.133, 0.160] & \textbf{0.580} [0.477, 0.669] \\
+Gemma 3 4B        & 0.845 [0.836, 0.854] & 0.245 [0.225, 0.267] & 0.151 [0.137, 0.166] & 0.460 [0.371, 0.554] \\
+MedGemma 1.5 4B   & 0.846 [0.835, 0.855] & 0.244 [0.224, 0.263] & 0.155 [0.140, 0.172] & 0.452 [0.369, 0.545] \\
+GPT-4.1-nano$^\dagger$ & 0.848 [0.838, 0.859] & 0.266 [0.241, 0.291] & 0.165 [0.146, 0.182] & 0.733 [0.656, 0.798] \\
+\midrule
+\multicolumn{5}{l}{\emph{MedicationQA}}\\
+Llama 3.1 8B      & 0.849 [0.841, 0.855] & \textbf{0.209} [0.184, 0.233] & \textbf{0.134} [0.118, 0.149] & 0.600 [0.507, 0.696] \\
+Gemma 3 12B       & 0.848 [0.841, 0.855] & 0.185 [0.160, 0.209] & 0.121 [0.106, 0.137] & \textbf{0.735} [0.646, 0.816] \\
+Gemma 3 4B        & 0.842 [0.834, 0.848] & 0.175 [0.148, 0.202] & 0.110 [0.095, 0.123] & 0.680 [0.573, 0.781] \\
+MedGemma 1.5 4B   & \textbf{0.851} [0.843, 0.858] & 0.200 [0.174, 0.226] & 0.127 [0.112, 0.143] & 0.640 [0.539, 0.731] \\
+GPT-4.1-nano$^\dagger$ & 0.852 [0.844, 0.859] & 0.209 [0.182, 0.238] & 0.133 [0.116, 0.150] & 0.760 [0.662, 0.847] \\
 \bottomrule
 \end{tabular}
+\\[2pt]
+{\footnotesize $^\dagger$ Closed-source API model (OpenAI), included as an
+external reference point, not as a peer of the locally-deployable open-weight
+models; excluded from the per-column ``best'' comparison.}
+\end{adjustwidth}
+\end{table}
+
+\begin{table}[!ht]
+\begin{adjustwidth}{-2.25in}{0in}
+\centering
+\caption{{\bf Within-model reproducibility across 10 runs, mean [95\% CI].}
+Self-agreement (higher is better; $1/N{=}0.10$ = every run distinct) and
+uniqueness (lower is better) are lexical; semantic self-similarity is the mean
+pairwise BERTScore-F1 across the 10 runs (higher is better, robust to
+paraphrase). Bold = best among the open-weight models per column, per dataset.}
+\label{tab:repro}
+\footnotesize
+\begin{tabular}{lccc}
+\toprule
+\textbf{Model} & \textbf{Self-agreement} $\uparrow$ & \textbf{Uniqueness} $\downarrow$ & \textbf{Semantic self-sim.} $\uparrow$ \\
+\midrule
+\multicolumn{4}{l}{\emph{MedQuAD}}\\
+Llama 3.1 8B      & 0.106 [0.100, 0.116] & 0.994 [0.984, 1.000] & 0.937 [0.932, 0.941] \\
+Gemma 3 12B       & \textbf{0.190} [0.158, 0.230] & \textbf{0.896} [0.848, 0.934] & \textbf{0.959} [0.954, 0.964] \\
+Gemma 3 4B        & 0.162 [0.142, 0.184] & 0.926 [0.898, 0.950] & 0.958 [0.953, 0.962] \\
+MedGemma 1.5 4B   & 0.138 [0.118, 0.164] & 0.952 [0.922, 0.978] & 0.947 [0.942, 0.952] \\
+GPT-4.1-nano$^\dagger$ & 0.150 [0.128, 0.176] & 0.944 [0.914, 0.970] & 0.958 [0.953, 0.962] \\
+\midrule
+\multicolumn{4}{l}{\emph{MedicationQA}}\\
+Llama 3.1 8B      & 0.162 [0.126, 0.208] & 0.930 [0.882, 0.972] & 0.939 [0.934, 0.944] \\
+Gemma 3 12B       & \textbf{0.260} [0.222, 0.302] & \textbf{0.764} [0.700, 0.820] & \textbf{0.965} [0.959, 0.970] \\
+Gemma 3 4B        & 0.176 [0.152, 0.204] & 0.892 [0.848, 0.928] & \textbf{0.965} [0.960, 0.969] \\
+MedGemma 1.5 4B   & 0.200 [0.160, 0.246] & 0.868 [0.814, 0.916] & 0.952 [0.946, 0.957] \\
+GPT-4.1-nano$^\dagger$ & 0.190 [0.156, 0.226] & 0.884 [0.826, 0.932] & 0.959 [0.955, 0.964] \\
+\bottomrule
+\end{tabular}
+\\[2pt]
+{\footnotesize $^\dagger$ Closed-source API reference (see
+Table~\ref{tab:quality}); excluded from the per-column ``best'' comparison.}
+\end{adjustwidth}
 \end{table}
 
 \begin{table}[!ht]
 \centering
-\caption{{\bf Reproducibility and efficiency ($n{=}50$ questions,
-10 runs/model/question).} Agreement: higher is better
-(1.0\,=\,perfectly deterministic output; $1/N{=}0.10$\,=\,near-complete
-stochasticity). Uniqueness: lower is better
-(0.0\,=\,all runs identical; 1.0\,=\,every run unique).}
-\label{tab:repro}
-\begin{tabular}{lccc}
+\caption{{\bf Inference efficiency (MedQuAD, tokens/second).} Median per-run
+throughput; MedicationQA throughput is comparable. GPT-4.1-nano is API-served
+and network-bound rather than compute-bound on local hardware.}
+\label{tab:efficiency}
+\begin{tabular}{lc}
 \toprule
-\textbf{Model} & \textbf{Agreement} & \textbf{Uniqueness} & \textbf{Tok/s} \\
+\textbf{Model} & \textbf{Tokens/s} \\
 \midrule
-Llama 3.1 8B      & 0.122 & 0.974 & \textbf{43.0} \\
-Gemma 3 12B       & \textbf{0.198} & \textbf{0.868} & 25.5 \\
-MedGemma 1.5 4B   & 0.146 & 0.936 & 28.7 \\
+GPT-4.1-nano$^\dagger$ & 97.9 \\
+Gemma 3 4B        & 61.0 \\
+Llama 3.1 8B      & 41.3 \\
+MedGemma 1.5 4B   & 29.1 \\
+Gemma 3 12B       & 23.7 \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\begin{figure}[!ht]
+\centering
+\includegraphics[width=\linewidth]{fig_repro_medquad.png}\\[4pt]
+\includegraphics[width=\linewidth]{fig_repro_medicationqa.png}
+\caption{{\bf Within-model reproducibility by model, with 95\% bootstrap
+confidence intervals.} Per-model lexical self-agreement ($\uparrow$), lexical
+uniqueness ($\downarrow$), and semantic self-similarity ($\uparrow$) across the
+10 runs. \textbf{(A)} MedQuAD (top); \textbf{(B)} MedicationQA (bottom). Across
+both datasets and all five models, lexical agreement is low while semantic
+self-similarity is high (0.94--0.97), showing that run-to-run divergence is
+largely paraphrastic rather than meaning-level.}
+\label{fig:repro}
+\end{figure}
+
+\begin{figure}[!ht]
+\centering
+\includegraphics[width=\linewidth]{fig_quality_medquad.png}\\[4pt]
+\includegraphics[width=\linewidth]{fig_quality_medicationqa.png}
+\caption{{\bf Model-vs-gold quality by model, with 95\% bootstrap confidence
+intervals.} BERTScore F1, Token F1, ROUGE-L, and LLM-judge score per model.
+\textbf{(A)} MedQuAD (top); \textbf{(B)} MedicationQA (bottom). BERTScore is
+tightly clustered across models; the closed reference GPT-4.1-nano leads on the
+judge score but remains within the open models' range on the other metrics.}
+\label{fig:quality}
+\end{figure}
 
 \paragraph{Quality.}
-BERTScore F1 is tightly clustered (0.847--0.852), confirming broadly
-similar \emph{semantic} alignment with gold at the embedding level.
-Differences become clearer on lexical metrics:
-Llama 3.1 8B leads on Token F1 (0.277 vs.\ 0.239--0.249) and
-BERTScore (0.852).
-The LLM judge---which rewards holistic clinical correctness---tells
-a subtly different story: Gemma 3 12B edges ahead (0.600) over
-Llama 3.1 8B (0.592), while the clinically fine-tuned
-MedGemma 1.5 4B lags substantially (0.459).
+Across both datasets, BERTScore F1 is tightly clustered (0.84--0.85)
+for all five models, indicating broadly similar embedding-level
+alignment with the gold answers and limited discriminative power at the
+semantic-similarity level. The lexical and judge metrics separate the
+models more clearly. On MedQuAD, Llama 3.1 8B leads the open models on
+Token F1 (0.287) and ROUGE-L (0.172), whereas Gemma 3 12B obtains the
+highest open-model judge score (0.580); on MedicationQA the judge scores
+are higher overall and Gemma 3 12B again leads the open models (0.735).
+The closed-source reference, GPT-4.1-nano, obtains the highest judge
+score on both datasets (0.733 and 0.760), but its BERTScore, Token F1,
+and ROUGE-L all fall within the range spanned by the open models, so it
+does not dominate the comparison---a useful calibration point rather
+than an upper bound the open models fail to approach.
 Notably, no model produces an exact lexical match with any gold
-answer (exact match = 0.000 across all models), confirming that
-all three paraphrase rather than recall. Nevertheless, this was important
-to show also as a signal of no overfitting of the models for the dataset
-we used as medically validated ground-truth.
+answer (exact match = 0.000 across all models), confirming that all
+models paraphrase rather than recall; we also read this as a signal of
+no overfitting to the medically validated ground-truth corpus.
 
 \paragraph{Reproducibility.}
-The most striking finding is the near-complete output uniqueness at
-$T{=}0.2$.
-Out of 500 runs per model, Gemma 3 12B produced 434 unique
-normalized responses (86.8\%), MedGemma 1.5 4B produced 468
-(93.6\%), and Llama 3.1 8B produced 487 (97.4\%).
-Self-agreement rates, the fraction of runs matching the modal
-response---range from 0.122 (Llama 3.1 8B) to 0.198
-(Gemma 3 12B): even the most consistent model agrees with itself
-on fewer than one in five runs on average.
-We also observe that pairwise \emph{exact} output overlap across all
-model pairs is 0.000. We present this only as a qualitative
-observation: with free-form generation and a strict string-based
-comparison, near-zero exact overlap is expected, and string-level
-overlap is uninformative about semantic or clinical equivalence---two
-medically equivalent but differently worded answers count as
-non-overlapping. We therefore avoid interpreting this as evidence that
-the models occupy genuinely disjoint \emph{behavioural} spaces, and we
-quantify semantic, rather than lexical, agreement separately (see the
-Evaluation metrics section). More broadly, throughout this section we
-frame these results as measures of run-to-run \emph{output
-variability}, not as direct evidence of clinical inconsistency.
+The central finding is a large, consistent gap between \emph{lexical}
+and \emph{semantic} reproducibility that holds across both datasets and
+all five models, including the closed reference (Fig~\ref{fig:repro}).
+Lexically, outputs are highly variable: self-agreement ranges from 0.11
+to 0.26 and uniqueness from 0.76 to 0.99, so even the most consistent
+model reproduces its modal answer on only a minority of runs (e.g., on
+MedQuAD, Llama 3.1 8B is unique on 99.4\% of runs and Gemma 3 12B on
+89.6\%). Semantically, however, the same runs are highly similar: mean
+pairwise semantic self-similarity is 0.94--0.97 for every model on both
+datasets. In other words, run-to-run divergence at $T{=}0.2$ is
+overwhelmingly \emph{paraphrastic} rather than meaning-level---models
+say substantially the same thing in different words. This directly
+addresses the concern that purely lexical metrics overstate instability
+by counting paraphrases as disagreements; we nonetheless read the
+semantic figure as a complement to, not a replacement for, the lexical
+measures, given the known high baseline floor of embedding similarity.
+Pairwise \emph{exact} output overlap across model pairs is 0.000, which
+we treat only as a qualitative observation: strict string comparison is
+uninformative about semantic or clinical equivalence---two medically
+equivalent but differently worded answers count as non-overlapping. We
+therefore frame these results as run-to-run \emph{output variability},
+not as direct evidence of clinical inconsistency.
 
-\paragraph{Quality--reproducibility trade-off.}
-A trade-off is apparent across the three models.
-Llama 3.1 8B achieves the highest lexical quality and fastest
-throughput (43.0 tok/s) but the worst reproducibility.
-Gemma 3 12B achieves the highest judge score and best
-reproducibility, at the cost of being the slowest (25.5 tok/s).
-MedGemma 1.5 4B ranks last or second-to-last on every metric
-despite its clinical fine-tuning.
-However, because MedGemma is also the smallest model in our comparison
-(4B vs.\ 8B and 12B), this result conflates the effect of domain
-adaptation with a 2--3$\times$ parameter count difference;
-a controlled comparison against a same-size general-purpose baseline
-(e.g., Gemma 3 4B) would be needed to disentangle these factors.
+\paragraph{Quality--reproducibility trade-off and the role of scale.}
+A trade-off is again visible among the open models. Llama 3.1 8B attains
+the highest lexical quality and throughput on MedQuAD but is the least
+lexically reproducible (uniqueness 0.99) and has the lowest semantic
+self-similarity. Gemma 3 12B is the most reproducible model on both
+datasets---on both the lexical and the semantic measures---while also
+achieving the best open-model judge score, at the cost of the lowest
+throughput (Table~\ref{tab:efficiency}). With the same-size control now
+included, the effect of scale is clean: Gemma 3 12B is more reproducible
+and higher-scoring than Gemma 3 4B, whereas the clinically fine-tuned
+MedGemma 1.5 4B does \emph{not} improve over its same-size
+general-purpose sibling Gemma 3 4B (judge 0.452 vs.\ 0.460 on MedQuAD;
+0.640 vs.\ 0.680 on MedicationQA, with overlapping confidence
+intervals), indicating that at these scales capacity, not domain
+fine-tuning, drives the differences (see Discussion).
 
 % ---- 5. Discussion ------------------------------------------
 \section*{Discussion}
@@ -554,12 +681,17 @@ a controlled comparison against a same-size general-purpose baseline
 
 \paragraph{Reproducibility is not solved by low temperature.}
 The most actionable finding is that $T{=}0.2$ does not yield
-reproducible behavior in practice.
-Self-agreement rates of 0.12--0.20 mean that for a given clinical
-question, the same model is almost certain to give a different answer
+\emph{lexically} reproducible behavior in practice.
+Self-agreement rates of 0.11--0.26 mean that for a given clinical
+question, the same model almost always returns differently worded text
 on the next invocation: Llama 3.1 8B, the least consistent model,
-produces a unique normalized response on 97.4\% of runs.
-For clinical deployment, this necessitates output-stabilization
+produces a unique normalized response on up to 99\% of runs.
+Importantly, this instability is largely surface-level: semantic
+self-similarity across runs stays high (0.94--0.97), so the dominant
+risk is variable phrasing and emphasis rather than outright
+contradictory clinical content. Even so, variable phrasing can shift
+perceived meaning, complicate auditing, and undermine user trust, so for
+clinical deployment we still recommend output-stabilization
 strategies: majority voting across multiple runs, confidence-score
 gating, or mandatory human-in-the-loop review before any LLM output
 is surfaced to a clinician.
@@ -572,21 +704,21 @@ of medically validated ground-truth or portions of it was visible
 during the model(s) training.
 
 \paragraph{Clinical fine-tuning versus model scale.}
-MedGemma 1.5 4B's clinical fine-tuning did not translate to higher
-judge scores, better lexical quality, or better reproducibility
-relative to the larger general-purpose models.
-On every metric in Tables~\ref{tab:quality} and~\ref{tab:repro},
-MedGemma finishes last or second-to-last.
-Critically, however, this comparison is confounded by model size:
-MedGemma (4B) is 2--3$\times$ smaller than Llama 3.1 8B and
-Gemma 3 12B, so the observed gap may reflect a capacity difference
-rather than a failure of domain adaptation.
-Isolating the fine-tuning effect would require comparing MedGemma
-against a same-size general-purpose baseline (e.g., Gemma 3 4B),
-which we leave to future work.
-This finding is consistent with the broader observation that
-scale often dominates domain adaptation when the target task is
-covered in pretraining~\cite{singhal2023large, nori2023gpt4med}.
+Including Gemma 3 4B as a same-size general-purpose control lets us
+separate domain fine-tuning from model scale---the comparison the
+original study could only flag as a confound. Two patterns emerge.
+First, \emph{scale helps}: Gemma 3 12B outperforms Gemma 3 4B on judge
+score and is more reproducible on both datasets. Second, at fixed size,
+\emph{clinical fine-tuning does not}: MedGemma 1.5 4B matches or trails
+its same-size base model Gemma 3 4B on the judge score (0.452 vs.\ 0.460
+on MedQuAD; 0.640 vs.\ 0.680 on MedicationQA) and shows no reproducibility
+advantage, with confidence intervals that overlap throughout. The earlier
+apparent ``MedGemma underperforms'' effect was therefore largely a
+capacity effect: once size is held constant, domain adaptation confers no
+measurable benefit on these consumer-health QA tasks.
+This is consistent with the broader observation that scale often
+dominates domain adaptation when the target task is well covered in
+pretraining~\cite{singhal2023large, nori2023gpt4med}.
 Practitioners should evaluate models empirically rather than relying
 on domain-specific branding, and should prefer same-scale comparisons
 to isolate the contribution of fine-tuning.
@@ -596,15 +728,20 @@ The judge model (a 20B open-source model, $T{=}0.2$) provides a
 clinically meaningful holistic quality signal, but is itself
 stochastic, and in the main runs each response was judged once.
 To characterize this, we re-judged a model-stratified subset of
-[NUMBER] responses five times. The judge was [NUMBER: highly / moderately]
-stable: the mean within-response score standard deviation was [NUMBER]
-and the one-way intraclass correlation was ICC(1)~$=$~[NUMBER],
-indicating that [NUMBER: most / a substantial part] of the score
-variance reflects genuine between-response differences rather than
-judge noise. Because the judge score is also the metric on which models
-diverge most, this residual variance remains a meaningful limitation.
-For production evaluations, we recommend running the judge multiple
-times per response and averaging, or adopting a deterministic
+responses five times on each dataset. The judge was highly stable on
+MedQuAD---mean within-response score standard deviation 0.064 and
+one-way intraclass correlation ICC(1)~$=$~0.94 ($n{=}22$
+responses)---and moderately stable on MedicationQA (within-response SD
+0.111, ICC(1)~$=$~0.69, $n{=}25$), indicating that most of the score
+variance on MedQuAD, and a substantial part on the harder MedicationQA
+items, reflects genuine between-response differences rather than judge
+noise. We separately note that the judge returned an unparseable score
+on a small fraction of responses (5.2\% on MedQuAD, 2.9\% on
+MedicationQA); these were excluded from the judge means, and all other
+metrics are unaffected. Because the judge score is also the metric on
+which models diverge most, this residual variance remains a meaningful
+limitation. For production evaluations, we recommend running the judge
+multiple times per response and averaging, or adopting a deterministic
 rubric-grading approach where feasible.
 
 \subsection*{Toward improved reproducibility: type-3 ANFIS and related methods}
@@ -657,25 +794,26 @@ model families may exhibit different variance profiles.
 
 We have presented and applied a reproducibility-first evaluation
 framework for small open-weight LLMs in clinical question answering,
-covering 1,500 responses from three models evaluated on 50 MedQuAD
-questions with 10 runs each.
+covering 5,000 responses from five models (four open-weight, plus a
+closed-source reference) evaluated on two consumer-health datasets
+(MedQuAD and MedicationQA), 50 questions each with 10 runs.
 The results lead to three concrete takeaways for practitioners.
 
-First, \textbf{low temperature does not buy content reproducibility}.
-Even at $T{=}0.2$, self-agreement rates hover between 0.12 and 0.20,
-and 87--97\% of all outputs per model are unique.
-Any medical related usage must account for this variance through
-ensembling, gating, or human review.
+First, \textbf{low temperature does not buy lexical reproducibility, but
+the variability is mostly paraphrastic}.
+Even at $T{=}0.2$, lexical self-agreement is only 0.11--0.26 and
+76--99\% of outputs per model are unique; yet semantic self-similarity
+stays at 0.94--0.97, so models largely restate the same content in
+different words. Any medically related usage must still account for this
+surface variance through ensembling, gating, or human review.
 
-Second, \textbf{at these parameter counts, clinical fine-tuning does
-not compensate for a large capacity gap}.
-Gemma 3 12B (general-purpose, 12B) outperforms MedGemma 1.5 4B
-(clinically fine-tuned, 4B) on every dimension: judge score, lexical
-quality, and reproducibility.
-However, this comparison confounds fine-tuning with a 3$\times$ scale
-difference; a same-size comparison (e.g., Gemma 3 4B vs.\
-MedGemma 1.5 4B) is needed to isolate the fine-tuning effect.
-Model selection should be empirically driven, not label-driven.
+Second, \textbf{at these parameter counts, model scale---not clinical
+fine-tuning---drives quality}.
+With a same-size control (Gemma 3 4B) now included, MedGemma 1.5 4B
+shows no advantage over its general-purpose sibling on either dataset,
+while the larger Gemma 3 12B leads the open models. The earlier apparent
+shortfall of the clinically fine-tuned model was largely a capacity
+effect. Model selection should be empirically driven, not label-driven.
 
 Third, \textbf{quality and reproducibility partially trade off}.
 Llama 3.1 8B maximizes lexical quality and speed but minimizes
@@ -691,14 +829,11 @@ standard alongside accuracy in LLM benchmarking.
 
 \paragraph{Future work.}
 Planned extensions include additional models (Phi-3, Mistral-Medical,
-Qwen-Med), a controlled comparison of same-size general-purpose and
-clinically fine-tuned models (e.g., Gemma 3 4B vs.\
-MedGemma 1.5 4B) to isolate the effect of domain adaptation from
-model scale, evaluation on USMLE and MedQA benchmarks, ensemble
-decoding strategies to improve reproducibility, and a calibration
-study of the LLM judge against expert clinician ratings on a
-real-world EHR-derived question set
-(e.g., MIMIC-IV~\cite{johnson2023mimic}).
+Qwen-Med), evaluation on further benchmarks (e.g., USMLE-style MedQA),
+ensemble and type-3 ANFIS decoding/aggregation strategies to actively
+improve reproducibility, a human spot-check of the LLM judge against
+expert clinician ratings, and evaluation on a real-world EHR-derived
+question set (e.g., MIMIC-IV~\cite{johnson2023mimic}).
 
 % ---- Supporting information ---------------------------------
 \nolinenumbers
@@ -706,9 +841,10 @@ real-world EHR-derived question set
 
 \paragraph*{S1 File.}
 \label{S1_File}
-{\bf Sampled evaluation question set.} The exact 50 MedQuAD questions
-used for evaluation, regenerable with
-\texttt{clinical-eval export-sample -{}-sample-random 50 -{}-sample-seed 42}.
+{\bf Sampled evaluation question sets.} The exact 50 questions used for
+evaluation from each dataset (MedQuAD and MedicationQA), regenerable with
+\texttt{clinical-eval export-sample -{}-sample-random 50 -{}-sample-seed 42}
+(adding \texttt{-{}-prompt-file data/medicationqa.csv} for MedicationQA).
 
 % ---- References ---------------------------------------------
 \begin{thebibliography}{99}
@@ -717,6 +853,13 @@ used for evaluation, regenerable with
 A.~Ben Abacha and D.~Demner-Fushman.
 \newblock A question entailment approach to question answering.
 \newblock \emph{BMC Bioinformatics}, 20(1):511, 2019.
+
+\bibitem{abacha2019medication}
+A.~Ben Abacha, Y.~Mrabet, M.~Sharp, T.~R. Goodwin, S.~E. Shooshan, and
+D.~Demner-Fushman.
+\newblock Bridging the gap between consumers' medication questions and trusted
+answers.
+\newblock In \emph{MEDINFO 2019}, pages 25--29, 2019.
 
 \bibitem{dubey2024llama3}
 A.~Dubey et~al.
